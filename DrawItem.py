@@ -5,6 +5,8 @@ from Bezier import bezier_curve
 ID_PEN=1
 ID_END=2
 ID_CONTROL=4
+ID_SCISSOR=8
+ID_STATIC=16
 
 def linearTrans(x,w0,w1):
     return x*w1/w0
@@ -18,7 +20,6 @@ class DrawItem:
         self.type=0
         self.pen=None
         self.brush=None
-        print("init")
         pass
 
     def paint(self,painter:QPainter,pd:QPaintDevice):
@@ -30,16 +31,16 @@ class DrawItem:
         if self.brush !=None:
             painter.setBrush(self.pen)
 
+    def testType(self):
+        print(self.type)
 
-
-
+# 点
 class ItemPoint(DrawItem):
     def __init__(self,x=0,y=0):
         super(ItemPoint,self).__init__()
         self.x=x
         self.y=y
         self.type="point"
-
         pass
 
     def paint(self,painter:QPainter,view:QPaintDevice):
@@ -49,8 +50,6 @@ class ItemPoint(DrawItem):
         y=linearTrans(self.y,self.height,view.height())
         painter.drawPoint(x,y)
         print("%s:(%d,%d)"%(self.type,x,y))
-        print("id:%d"%self.id)
-        print(id(self))
         painter.end()
         pass
 
@@ -71,7 +70,7 @@ class ItemPoint(DrawItem):
         elif self.id&ID_CONTROL!=0:
             self.pen=QPen(Qt.green,6)
 
-
+# 控制点
 class ItemControlPoint(ItemPoint):
     def __init__(self,x=0,y=0,item=None):
         super(ItemControlPoint,self).__init__()
@@ -80,6 +79,7 @@ class ItemControlPoint(ItemPoint):
         self.type="control point"
         self.item=item
 
+# 线
 class ItemLine(DrawItem):
     def __init__(self,x1=0,y1=0,x2=0,y2=0):
         super(ItemLine,self).__init__()
@@ -111,6 +111,37 @@ class ItemLine(DrawItem):
         self.x2=x2
         self.y2=y2
 
+# 曲线
+class ItemCurve(DrawItem):
+    def __init__(self,xs=[],ys=[]):
+        super(ItemCurve,self).__init__()
+        self.xs=xs
+        self.ys=ys
+        self.closed=False
+        self.type="lines"
+        pass
+
+    def paint(self,painter:QPainter,view:QPaintDevice):
+        if len(self.xs)<=1:
+            return
+        painter.begin(view)
+        self.setTool(painter)
+        for i in range(len(self.xs)-1):
+            x1=linearTrans(self.xs[i],self.width,view.width())
+            y1=linearTrans(self.ys[i],self.height,view.height())
+            x2=linearTrans(self.xs[i+1],self.width,view.width())
+            y2=linearTrans(self.ys[i+1],self.height,view.height())
+            painter.drawLine(x1,y1,x2,y2)
+        if self.closed:
+            x1=linearTrans(self.xs[-1],self.width,view.width())
+            y1=linearTrans(self.ys[-1],self.height,view.height())
+            x2=linearTrans(self.xs[0],self.width,view.width())
+            y2=linearTrans(self.ys[0],self.height,view.height())
+            painter.drawLine(x1,y1,x2,y2)
+        painter.end()
+        pass
+
+# 贝塞尔曲线
 class ItemBezierLine(ItemLine):
     def __init__(self,num=20,x1=0,y1=0,x2=0,y2=0):
         super(ItemBezierLine,self).__init__()
@@ -170,6 +201,37 @@ class ItemBezierLine(ItemLine):
             return (self.x2-bx[-2],self.y2-by[-2])
     def print(self):
         print("bezier line:(%d,%d),(%d,%d)"%(self.x1,self.y1,self.x2,self.y2))
+
+
+# 矩形
+class ItemRect(DrawItem):
+    def __init__(self,x1=0,y1=0,x2=0,y2=0):
+        super(ItemRect,self).__init__()
+        self.x1=x1
+        self.y1=y1
+        self.x2=x2
+        self.y2=y2
+        self.type="rect"
+        pass
+
+    def setPos(self,x1=0,y1=0,x2=0,y2=0):
+        self.x1=x1
+        self.y1=y1
+        self.x2=x2
+        self.y2=y2
+        pass
+
+    def paint(self,painter:QPainter,view:QPaintDevice):
+        painter.begin(view)
+        self.setTool(painter)
+        x1=linearTrans(self.x1,self.width,view.width())
+        y1=linearTrans(self.y1,self.height,view.height())
+        x2=linearTrans(self.x2,self.width,view.width())
+        y2=linearTrans(self.y2,self.height,view.height())
+        painter.drawRect(x1,y1,x2-x1,y2-y1)
+        print("rect")
+        painter.end()
+        pass
 
 class ItemImage(DrawItem):
     def __init__(self,img,x=0,y=0):

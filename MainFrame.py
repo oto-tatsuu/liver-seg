@@ -3,8 +3,11 @@ from PySide2.QtGui import QPen, Qt
 from PySide2.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTreeWidget, QAction, \
     QFileDialog
 
-from CanvasWidget import CanvasWidget
+import DrawItem
+from CanvasWidget import CanvasWidget, scissorLogic
 from DrawItem import ItemImage
+# from IntelligentScissor import scissor
+from IntelligentScissor import scissor
 from ToolsWidget import ToolsWidget
 from Bezier import bezier_curve
 
@@ -65,6 +68,12 @@ class MainFrame(QMainWindow):
         test2=QAction("test2",self)
         testMenu.addAction(test2)
 
+        toolMenu=menu.addMenu("&Tools")
+        penTool=QAction("Pen",self)
+        toolMenu.addAction(penTool)
+        scissorTool=QAction("Scissor",self)
+        toolMenu.addAction(scissorTool)
+
 
         # 连接槽函数
         # self.tools.generate_contour.clicked.connect(self.generateContour)
@@ -76,7 +85,8 @@ class MainFrame(QMainWindow):
         oFAct.triggered.connect(self.onOpenFile)
         test1.triggered.connect(self.test1)
         test2.triggered.connect(self.test2)
-
+        penTool.triggered.connect(self.penToolClick)
+        scissorTool.triggered.connect(self.scissorTool)
         pass
 
     def generateContour(self):
@@ -105,29 +115,17 @@ class MainFrame(QMainWindow):
 
     def b2Click(self):
         print("b2")
-        # self.canvas.state=1
         self.canvas.update()
         pass
 
     def b3Click(self):
         print("b3")
         canvas=self.canvas
-        # self.canvas.state=2
-        # item={}
-        # item["name"]="image"
-        # item["scaling"]=True
-        # item["image"]=canvas.backView
-        # item["pos"]=(0,0)
-        # item["width"]=canvas.opeView.width()
-        # item["height"]=canvas.opeView.height()
         item=ItemImage(canvas.backView,0,0)
         item.width=canvas.opeView.width()
         item.height=canvas.opeView.height()
         canvas.drawItemList["images"].append(item)
-        # self.canvas.qp.begin(self.canvas.opeView)
-        # canvas.qp.drawImage(canvas.opeView.rect(),canvas.backView)
-        # canvas.qp.end()
-        self.update()
+        self.canvas.update()
         pass
 
     def b4Click(self):
@@ -138,6 +136,39 @@ class MainFrame(QMainWindow):
         canvas.qp.end()
         pass
 
+    def penToolClick(self):
+        self.canvas.toolState=1
+        self.canvas.state=0
+        pass
+
+    def scissorTool(self):
+        if self.canvas.toolState==2:
+            return
+        self.canvas.toolState=2
+        self.canvas.state=0
+        self.canvas.scissorLogic=scissorLogic(scissor(self.canvas.img))
+        find=False
+        for item in self.canvas.drawItemList["lines"]:
+            # 当前列表中有且只有两个item，id为SICISSOR
+            if item.id|DrawItem.ID_SCISSOR!=0:
+                find=True
+                item.xs=[]
+                item.ys=[]
+                break
+        if not find:
+            itemStaticList= DrawItem.ItemCurve([], [])
+            itemStaticList.pen=QPen(Qt.green,1)
+            itemStaticList.width=self.canvas.img.shape[1]
+            itemStaticList.height=self.canvas.img.shape[0]
+            itemStaticList.id=DrawItem.ID_SCISSOR|DrawItem.ID_STATIC
+            itemDynamicList=DrawItem.ItemCurve([], [])
+            itemDynamicList.pen=QPen(Qt.green,1)
+            itemDynamicList.width=self.canvas.img.shape[1]
+            itemDynamicList.height=self.canvas.img.shape[0]
+            itemDynamicList.id=DrawItem.ID_SCISSOR
+            self.canvas.drawItemList["lines"].append(itemStaticList)
+            self.canvas.drawItemList["lines"].append(itemDynamicList)
+        pass
     def onOpenFile(self):
         print("open file")
         file=QFileDialog()

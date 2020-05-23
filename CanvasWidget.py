@@ -1,9 +1,12 @@
 import PySide2
+import cv2
 from PySide2.QtCore import QRect
 from PySide2.QtGui import QPainter, QPixmap, QPen, Qt, QImage, QPaintDevice, QBrush
 from PySide2.QtWidgets import QLabel
 
 import DrawItem
+import IntelligentScissor
+import IntelligentScissor2
 from DrawItem import ItemPoint, ItemLine, ItemBezierLine
 
 dir = "./src/test.jpg"
@@ -21,9 +24,12 @@ class CanvasWidget(QLabel):
     def __init__(self, parent=None):
         super(CanvasWidget, self).__init__(parent)
         self.state = 0
+        self.toolState = 0  # pen:1,scissor:2
+        self.scissorLogic = None
         self.img_w = 0
         self.img_h = 0
-        self.drawItemList = {"images": [], "lines": [], "points": []}
+        self.img = None
+        self.drawItemList = {"images": [], "lines": [], "polylines": [], "points": []}
         self.makeCurve = False
         self.mouseInPoint = False
         self.makeControlP = False
@@ -42,12 +48,10 @@ class CanvasWidget(QLabel):
 
     # 槽函数
     def paintEvent(self, event):
-        pen = QPen(Qt.red, 6)
-        self.drawList(self.qp, self.opeView, self.drawItemList, pen)
+        self.drawList(self.qp, self.opeView, self.drawItemList)
         self.qp.begin(self)
         self.qp.drawImage(event.rect(), self.opeView)
         self.qp.end()
-
 
         pass
 
@@ -63,7 +67,7 @@ class CanvasWidget(QLabel):
 
     def mouseMoveEvent(self, event):
         pos = event.localPos()
-        if self.state == 1:
+        if self.state == 1 and self.toolState == 1:
             print("state1")
             self.selectedItem["points"] = []
             self.selectedItem["in_lines"] = []
@@ -79,7 +83,7 @@ class CanvasWidget(QLabel):
                 self.state = 2
                 self.selectedItem["points"][0].onMouseIn()
             self.update()
-        elif self.state == 2:
+        elif self.state == 2 and self.toolState == 1:
             print("state2")
             if not self.selectedItem["points"][0].disToPoint(pos.x(), pos.y(), 5):
                 self.state = 1
@@ -88,7 +92,7 @@ class CanvasWidget(QLabel):
                 self.selectedItem["in_lines"] = []
                 self.selectedItem["out_lines"] = []
             self.update()
-        elif self.state == 3:
+        elif self.state == 3 and self.toolState == 1:
             print("state3")
             self.selectedItem["points"][0].x = int(pos.x())
             self.selectedItem["points"][0].y = int(pos.y())
@@ -97,19 +101,33 @@ class CanvasWidget(QLabel):
             print(self.selectedItem["out_lines"])
             for i in self.selectedItem["out_lines"]:
                 i.setP1(int(pos.x()), int(pos.y()))
-            cPoint=self.selectedItem["points"][0]
-            if cPoint.id&DrawItem.ID_CONTROL!=0:
-                if cPoint.item.controlP1[0]==cPoint.x and cPoint.item.controlP1[1]==cPoint.y:
-                    cPoint.item.setControlP1(int(pos.x()),int(pos.y()))
+            cPoint = self.selectedItem["points"][0]
+            if cPoint.id & DrawItem.ID_CONTROL != 0:
+                if cPoint.item.controlP1[0] == cPoint.x and cPoint.item.controlP1[1] == cPoint.y:
+                    cPoint.item.setControlP1(int(pos.x()), int(pos.y()))
                 else:
-                    cPoint.item.setControlP2(int(pos.x()),int(pos.y()))
+                    cPoint.item.setControlP2(int(pos.x()), int(pos.y()))
             self.update()
+        # scissor
+        elif self.state == 0 and self.toolState == 2:
+            # list[0]=itemStaticList,list[1]=itemDynamicList
+            list = [x for x in self.drawItemList["lines"] if x.id & DrawItem.ID_SCISSOR != 0]
+            freeX = pos.x() / self.width() * self.img.shape[1]
+            freeY = pos.y() / self.height() * self.img.shape[0]
+            if self.scissorLogic.scissor.isSetSeed:
+                xs, ys = self.scissorLogic.CalculateMininumPath(int(freeY), int(freeX))
+                print("add")
+                print(xs)
+                list[1].xs = xs
+                list[1].ys = ys
+            self.update()
+            pass
         pass
 
     def mousePressEvent(self, event):
         pos = event.localPos()
-        # 状态机实现
-        if self.state == 0:
+        # 状态机实现,Pen
+        if self.state == 0 and self.toolState == 1:
             # 空状态
             print("state:0")
             item = ItemPoint(pos.x(), pos.y())
@@ -120,7 +138,7 @@ class CanvasWidget(QLabel):
             self.drawItemList["points"].append(item)
             self.state = 1
             self.update()
-        elif self.state == 1:
+        elif self.state == 1 and self.toolState == 1:
             print("state:1")
             # 至少有一个点
             # 画点
@@ -144,7 +162,7 @@ class CanvasWidget(QLabel):
             print(i.x, i.y)
             self.drawItemList["lines"].append(line)
             self.update()
-        elif self.state == 2:
+        elif self.state == 2 and self.toolState == 1:
             if event.button() == Qt.LeftButton:
                 print("press left state 2")
                 item = self.selectedItem["points"][0]
@@ -169,7 +187,7 @@ class CanvasWidget(QLabel):
                     return
                 else:
                     self.state = 4
-        elif self.state == 4:
+        elif self.state == 4 and self.toolState == 1:
             # 添加控制点
             print("state4")
             item = DrawItem.ItemControlPoint(pos.x(), pos.y())
@@ -186,20 +204,70 @@ class CanvasWidget(QLabel):
             item.pen = QPen(Qt.green, 6)
             item.id = DrawItem.ID_PEN | DrawItem.ID_CONTROL
             self.drawItemList["points"].append(item)
-            line=DrawItem.ItemLine(self.selectedItem["points"][0].x,self.selectedItem["points"][0].y,pos.x(),pos.y())
-            line.width=self.width()
-            line.height=self.height()
-            line.pen=QPen(Qt.yellow,3)
-            line.id=DrawItem.ID_PEN
+            line = DrawItem.ItemLine(self.selectedItem["points"][0].x, self.selectedItem["points"][0].y, pos.x(),
+                                     pos.y())
+            line.width = self.width()
+            line.height = self.height()
+            line.pen = QPen(Qt.yellow, 3)
+            line.id = DrawItem.ID_PEN
             self.drawItemList["lines"].append(line)
-            self.state=2
+            self.state = 2
             self.update()
             pass
-
+        # scissor
+        elif self.state == 0 and self.toolState == 2:
+            print("scissor set seed start")
+            x = pos.x() * self.img_w / self.width()
+            y = pos.y() * self.img_h / self.height()
+            list = [item for item in self.drawItemList["lines"] if item.id & DrawItem.ID_SCISSOR != 0]
+            l = IntelligentScissor.DEFAULT_SEARCh_LENGTH
+            x1 = x - l / 2 if x - l / 2 >= 0 else 0
+            y1 = y - l / 2 if y - l / 2 >= 0 else 0
+            x2 = x + l / 2 if x + l / 2 < self.img_w else self.img_w - 1
+            y2 = y + l / 2 if y + l / 2 < self.img_h else self.img_h - 1
+            if not self.scissorLogic.scissor.isSetSeed:
+                print("scissor set seed start")
+                self.scissorLogic.SetSeed(int(y),int(x))
+                list[0].xs.append(x)
+                list[0].ys.append(y)
+                rect = DrawItem.ItemRect(x1, y1, x2, y2)
+                rect.height = self.img_h
+                rect.width = self.img_w
+                rect.id = DrawItem.ID_SCISSOR
+                pen = QPen(Qt.yellow, 3)
+                pen.setStyle(Qt.DashLine)
+                rect.pen = pen
+                self.drawItemList["polylines"].append(rect)
+            else:
+                seedx = self.scissorLogic.GetSeedC()
+                seedy = self.scissorLogic.GetSeedR()
+                print(seedx)
+                print(seedy)
+                if abs(x - seedx) > l/2 or abs(y - seedy) > l/2:
+                    return
+                print("scissor set seed start")
+                self.scissorLogic.SetSeed(int(y),int(x))
+                for i in range(len(list[1].xs)):
+                    list[0].xs.append(list[1].xs[-1 - i])
+                    list[0].ys.append(list[1].ys[-1 - i])
+                list[1].xs = []
+                list[1].ys = []
+                rect = None
+                for item in self.drawItemList["polylines"]:
+                    if item.id & DrawItem.ID_SCISSOR != 0:
+                        rect = item
+                        break
+                rect.setPos(x1, y1, x2, y2)
+                print(x1, y1, x2, y2)
+            print("top")
+            print(list[0].xs[-1])
+            print(list[0].ys[-1])
+            self.scissorLogic.LiveWireDP(int(y), int(x))
+            self.update()
         pass
 
     def mouseReleaseEvent(self, event):
-        if self.state == 3:
+        if self.state == 3 and self.toolState == 1:
             self.state = 2
         pass
 
@@ -207,74 +275,48 @@ class CanvasWidget(QLabel):
         img = QImage(dir)
         self.img_w = img.width()
         self.img_h = img.height()
+        self.img = cv2.imread(dir)
         self.qp.begin(self.backView)
         self.qp.drawImage(self.backView.rect(), img)
         self.qp.end()
 
-    # point: {'pos':(x,y),'width':w,'height':h}
-    # curve:{'points':[],'width':w,'height':h}
-    # image:{'scaling':True,'image':QImage,'pos':(x,y),'width':w,'height':h}
-    def drawList(self, painter: QPainter, view: QPaintDevice, list, pen: QPen = None, brush: QBrush = None, ):
+    # {"images": [], "lines": [], "points": []}
+    def drawList(self, painter: QPainter, view: QPaintDevice, list):
         if len(list) <= 0:
             return
+        print("start draw item:")
+        print("-----------------------")
         for keys, value in enumerate(list):
             if len(list[value]) > 0:
                 for item in list[value]:
+                    item.testType()
                     item.paint(painter, view)
                 print("-----------------------")
-        # if len(list["images"])>0:
-        #     for item in list["images"]:
-        #         item.paint(painter,view)
-        #
-        # if len(list["points"])>0:
-        #     for item in list["points"]:
-        #         item.paint(painter,view)
-        #
-        #         pass
-        # if len(list["lines"])>0:
-        #     for item in list["liness"]:
-        #         item.paint(painter,view)
-        #
-        #         pass
-        # painter.begin(view)
-        # if pen!=None:
-        #     painter.setPen(pen)
-        # if brush!=None:
-        #     painter.setBrush(brush)
-        # if len(list)>0:
-        #     for item in list:
-        #         if "pen" in item.keys():
-        #             painter.setPen(item["pen"])
-        #         if "brush" in item.keys():
-        #             painter.setBrush(item["brush"])
-        #         if item['name']=="point":
-        #             x,y=self.linearTrans(item['pos'][0],item['pos'][1],item['width'],item['height'],view.width(),view.height())
-        #             painter.drawPoint(x,y)
-        #         if item['name']=="curve":
-        #             if len(item['points'])<=0:
-        #                 continue
-        #             elif len(item['points'])==1:
-        #                 x,y=self.linearTrans(item['points'][0][0],item['points'][0][1],item['width'],item['height'],view.width(),view.height())
-        #                 painter.drawPoint(x,y)
-        #             else:
-        #                 for i in range(len(item['points'])):
-        #                     x1=0
-        #                     x2=0
-        #                     y1=0
-        #                     y2=0
-        #                     x1,y1=self.linearTrans(item['points'][i][0],item['points'][i][1],item['width'],item['height'],view.width(),view.height())
-        #                     if i+1!=len(item['points']):
-        #                         x2,y2=self.linearTrans(item['points'][i+1][0],item['points'][i+1][1],item['width'],item['height'],view.width(),view.height())
-        #                         painter.drawLine(x1,y1,x2,y2)
-        #                     else:
-        #                         if item["closed"]:
-        #                             x2,y2=self.linearTrans(item['points'][0][0],item['points'][0][1],item['width'],item['height'],view.width(),view.height())
-        #                             painter.drawLine(x1,y1,x2,y2)
-        #         if item["name"]=="image":
-        #             if item["scaling"]:
-        #                 painter.drawImage(QRect(item["pos"][0],item["pos"][1],item["width"],item["height"]),item["image"])
-        # painter.end()
         pass
 
     def linearTrans(self, x, y, w0, h0, w1, h1):
         return (x * w1 / w0, y * h1 / h0)
+
+class scissorLogic():
+    def __init__(self,scissor):
+        self.scissor=scissor
+
+    def LiveWireDP(self, seedRow, seedCol, searchLength=IntelligentScissor.DEFAULT_SEARCh_LENGTH):
+        return self.scissor.LiveWireDP(seedRow,seedCol)
+
+    def CalculateMininumPath(self, freePtRow, freePtCol):
+        return self.scissor.CalculateMininumPath(freePtRow, freePtCol)
+
+    def SetSeed(self,R,C):
+        # self.scissor.originalSeedC.append(C)
+        # self.scissor.originalSeedR.append(R)
+        self.scissor.SetSeed(R,C)
+        pass
+
+    def GetSeedR(self):
+        return self.scissor.getseedRow()
+        pass
+
+    def GetSeedC(self):
+        return self.scissor.getseedCol()
+        pass
